@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robust Football Match Analyst</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #0d1117; color: #e6eeef; min-height: 100vh; font-family: sans-serif; }
+        .markdown-content h1 { font-size: 1.5rem; font-weight: bold; margin: 1rem 0; color: #38bdf8; border-bottom: 1px solid #2d333b; padding-bottom: 0.5rem;}
+        .markdown-content strong { font-weight: 700; color: #fff; }
+        .markdown-content ul { list-style: disc; margin-left: 1.5rem; margin-bottom: 1rem; }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <div class="max-w-4xl mx-auto">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl font-extrabold text-[#38bdf8]">Live Football Analyst</h1>
+            <p class="text-gray-400">Analysis using real-time web data via Google Search Grounding.</p>
+        </header>
+
+        <div class="bg-[#161b22] p-6 rounded-xl shadow-2xl mb-8 border border-[#2d333b]">
+            <textarea id="analysis-query" rows="3"
+                      placeholder="e.g., Analyze the form of Real Madrid and what their chances are in their next Champions League game."
+                      class="w-full p-3 bg-[#0d1117] border border-[#2d333b] rounded-lg focus:ring-2 focus:ring-[#38bdf8] text-white resize-none"
+            >Analyze the current form of Inter Milan in Serie A and their next three fixtures.</textarea>
+
+            <button id="analyze-button"
+                    class="mt-4 w-full px-6 py-3 bg-[#38bdf8] text-gray-900 font-bold rounded-xl hover:bg-sky-400 disabled:opacity-50 flex items-center justify-center transition">
+                <span id="button-text">Perform Analysis</span>
+                <svg id="loading-spinner" class="animate-spin -ml-1 mr-3 h-5 w-5 text-gray-900 hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+            </button>
+        </div>
+
+        <div class="bg-[#161b22] p-6 rounded-xl shadow-2xl border border-[#2d333b]">
+            <h2 class="text-xl font-bold mb-4 text-[#38bdf8]">Analysis Report</h2>
+            <div id="analysis-output" class="markdown-content text-gray-300 min-h-[100px]">
+                <p>Your analysis will appear here. The system uses Google Search to fetch the latest real-time football data before performing the analysis.</p>
+            </div>
+
+            <div id="sources-container" class="mt-6 pt-4 border-t border-[#2d333b] hidden">
+                <h3 class="text-sm font-semibold text-gray-400 mb-2">Sources (Real-Time Web Grounding):</h3>
+                <ul id="sources-list" class="text-xs text-gray-500 space-y-1"></ul>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        // IMPORTANT: For the Canvas environment, leave the apiKey as an empty string. 
+        // The platform securely injects the necessary credentials automatically.
+        const apiKey = "AIzaSyBBDxPo1ZNng4nKdlZAZDpravYnqzngO0c"; 
+        const API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent";
+
+        // DOM elements
+        const queryInput = document.getElementById('analysis-query');
+        const analyzeButton = document.getElementById('analyze-button');
+        const buttonText = document.getElementById('button-text');
+        const loadingSpinner = document.getElementById('loading-spinner');
+        const analysisOutput = document.getElementById('analysis-output');
+        const sourcesContainer = document.getElementById('sources-container');
+        const sourcesList = document.getElementById('sources-list');
+
+        // --- Core Functions ---
+
+        function renderMarkdown(markdownText) {
+            if (!markdownText) return '';
+            let html = markdownText || '';
+            
+            // Simple conversions for display
+            html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            html = html.replace(/^#\s(.*?)$/gm, '<h1>$1</h1>');
+            
+            // Handle lists
+            html = html.replace(/^\*\s(.*?)$/gm, '<li>$1</li>');
+            if (html.includes('<li>')) {
+                html = `<ul>${html}</ul>`;
+            }
+
+            // Handle paragraphs
+            html = html.split('\n\n').map(p => {
+                const trimmedP = p.trim();
+                if (trimmedP && !trimmedP.startsWith('<h1') && !trimmedP.startsWith('<ul') && !trimmedP.startsWith('<li')) {
+                    return `<p>${trimmedP}</p>`;
+                }
+                return trimmedP;
+            }).join('');
+            
+            return html;
+        }
+
+        async function retryFetchWithBackoff(payload, retries = 5, delay = 1000) {
+            const headers = { 'Content-Type': 'application/json' };
+            
+            for (let i = 0; i < retries; i++) {
+                try {
+                    const response = await fetch(`${API_URL}?key=${apiKey}`, {
+                        method: 'POST',
+                        headers: headers,
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (response.ok) {
+                        return await response.json();
+                    } else {
+                        const errorBody = await response.text();
+                        // Throw specific error for immediate display
+                        throw new Error(`API failed with status ${response.status}. Response detail: ${errorBody.substring(0, 150)}...`);
+                    }
+                } catch (error) {
+                    if (i === retries - 1) {
+                        // All retries failed, throw the last error
+                        throw error; 
+                    }
+                    // Wait before the next retry
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    delay *= 2; // Exponential backoff
+                }
+            }
+        }
+
+        async function performAnalysis() {
+            const userQuery = queryInput.value.trim();
+            if (!userQuery) {
+                analysisOutput.innerHTML = '<p class="text-red-400">Please enter a query to analyze.</p>';
+                return;
+            }
+
+            // --- State Transition: Loading ---
+            analysisOutput.innerHTML = '<p class="text-gray-400">Analyzing latest real-time data... Please wait.</p>';
+            sourcesList.innerHTML = '';
+            sourcesContainer.classList.add('hidden');
+            analyzeButton.disabled = true;
+            buttonText.textContent = 'Analyzing...';
+            loadingSpinner.classList.remove('hidden');
+
+            const systemPrompt = "You are a world-class football match analyst and sports reporter. Your task is to analyze the requested football topic (match, team form, injury news, or recent results). You MUST use the latest information provided by Google Search grounding to inform your analysis. Structure the response clearly and concisely in Markdown, using a title, brief paragraphs, and a key takeaway/prediction if possible.";
+
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                tools: [{ "google_search": {} }], // Use Google Search for real-time data
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+            };
+
+            try {
+                const result = await retryFetchWithBackoff(payload);
+                const candidate = result.candidates?.[0];
+
+                if (candidate && candidate.content?.parts?.[0]?.text) {
+                    const analysisText = candidate.content.parts[0].text;
+                    
+                    // 1. Render Analysis
+                    analysisOutput.innerHTML = renderMarkdown(analysisText);
+
+                    // 2. Extract and display grounding sources
+                    const sources = candidate.groundingMetadata?.groundingAttributions
+                        ?.map(attr => ({ uri: attr.web?.uri, title: attr.web?.title }))
+                        .filter(source => source.uri && source.title) || [];
+
+                    if (sources.length > 0) {
+                        sourcesList.innerHTML = sources.map((source, index) => 
+                            `<li class="hover:text-[#38bdf8] truncate">
+                                ${index + 1}. <a href="${source.uri}" target="_blank" class="underline">${source.title}</a>
+                            </li>`
+                        ).join('');
+                        sourcesContainer.classList.remove('hidden');
+                    } else {
+                        sourcesContainer.classList.add('hidden');
+                    }
+
+                } else {
+                    analysisOutput.innerHTML = '<p class="text-red-400">Analysis failed: The model returned an empty response. Please check the query.</p>';
+                }
+
+            } catch (error) {
+                // --- State Transition: Error ---
+                console.error("Analysis Error:", error);
+                analysisOutput.innerHTML = `<div class="p-4 bg-red-900/50 border border-red-700 rounded-lg">
+                    <h3 class="font-bold text-red-300">Analysis Failed</h3>
+                    <p class="text-red-200 text-sm mt-1">There was an issue processing the request. Check your network or API settings.</p>
+                    <p class="text-xs text-red-400 mt-2">Error Detail: ${error.message}</p>
+                </div>`;
+            } finally {
+                // --- State Transition: Reset ---
+                analyzeButton.disabled = false;
+                buttonText.textContent = 'Perform Analysis';
+                loadingSpinner.classList.add('hidden');
+            }
+        }
+
+        // --- Event Listeners ---
+        analyzeButton.addEventListener('click', performAnalysis);
+        queryInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); analyzeButton.click(); }
+        });
+        window.onload = performAnalysis; // Run on load with default query
+    </script>
+</body>
+</html>
